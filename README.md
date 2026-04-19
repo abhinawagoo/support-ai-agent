@@ -51,6 +51,51 @@ Scenarios live in `tests/dottle_platform/scenarios.py` — add new functions and
 
 A public URL means anyone can use your OpenAI quota. Start with low limits on your OpenAI org, watch usage, and add auth / rate limits later if traffic grows.
 
+### Production checklist (deploy + test)
+
+Use this flow after your GitHub repo is connected to Railway.
+
+**1. Variables (same service as the Streamlit app)**  
+
+Set everything you need for the live app plus Dottle:
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` | Chat |
+| `DOTTLE_API_KEY` | Monitoring ingest |
+| `DOTTLE_URL` | Optional; defaults to `https://dottle-production.up.railway.app/api/v1` |
+| `DOTTLE_AGENT_NAME`, `DOTTLE_USER_ID`, `DOTTLE_USER_EMAIL` | Optional session labels |
+
+Redeploy after saving variables (**Deployments** → **Redeploy**), or trigger a deploy by pushing to `main`.
+
+**2. Smoke-test the deployed UI**  
+
+Open **Networking → your Railway URL**, pick a provider/model in the sidebar, send one chat message. Confirm the assistant replies and Dottle shows a session/spans.
+
+**3. Run Dottle scenario tests using production secrets (recommended)**  
+
+Railway’s runtime image only installs `requirements.txt` (not dev deps). Easiest approach: run the scenario runner **on your machine** while Railway **injects the same env vars** as production:
+
+```bash
+# One-time: https://docs.railway.app/develop/cli — then:
+cd /path/to/support-ai-agent
+railway login
+railway link          # select this project/service
+
+pip install -r requirements-dev.txt
+railway run python scripts/run_dottle_scenarios.py
+```
+
+That uses your **Railway Variables** for `DOTTLE_API_KEY` etc., so ingest hits Dottle the same way the deployed app does. Expect all scenarios to print `ok`.
+
+**4. Optional: pytest with Railway env**
+
+```bash
+railway run pytest tests/test_dottle_platform.py -m integration -v
+```
+
+(`pytest` must be installed locally via `requirements-dev.txt`.)
+
 ## Push to GitHub
 
 ```bash

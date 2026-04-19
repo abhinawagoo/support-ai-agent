@@ -17,10 +17,11 @@ streamlit run streamlit_app.py
 1. Push this repo to GitHub (see below).
 2. In [Railway](https://railway.app): **New Project** → **Deploy from GitHub repo** → pick this repository.
 3. Railway will detect **Nixpacks** from `requirements.txt` and use `railway.toml` / `Procfile` for the start command (Streamlit binds to `$PORT` on `0.0.0.0`).
-4. Open the service → **Variables** → add at least:
-   - `OPENAI_API_KEY` — required
-   - `EXA_API_KEY` — optional (Exa search tool)
-   - `OPENAI_MODEL` — optional (default `gpt-4o-mini`)
+4. Open the service → **Variables** → add at least one LLM key:
+   - `OPENAI_API_KEY` — for OpenAI models
+   - `ANTHROPIC_API_KEY` — for Anthropic Claude models
+   - Optional: `EXA_API_KEY` (Exa search tool), `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `LLM_PROVIDER` (`openai` or `anthropic`, default `openai`)
+   - Optional monitoring: `DOTTLE_API_KEY`, `DOTTLE_URL` (defaults to Dottle production), `DOTTLE_AGENT_NAME`, `DOTTLE_USER_ID`, `DOTTLE_USER_EMAIL`
 5. **Settings** → **Networking** → **Generate domain** (or attach your own).
 6. Redeploy if needed after changing variables.
 

@@ -12,6 +12,28 @@ cp .env.example .env
 streamlit run streamlit_app.py
 ```
 
+## Test Dottle (monitoring scenarios)
+
+This repo includes a small **scenario runner** that hits the same ingest paths as production (`/api/v1/ingest/...`) so you can validate sessions, LLM spans, tool spans (ok + error), and session end (completed vs error) in the Dottle dashboard.
+
+```bash
+pip install -r requirements-dev.txt
+export DOTTLE_API_KEY=dtl_live_...
+# optional: export DOTTLE_URL=https://dottle-production.up.railway.app/api/v1
+
+python scripts/run_dottle_scenarios.py
+```
+
+Or with pytest (skipped if `DOTTLE_API_KEY` is unset):
+
+```bash
+pytest tests/test_dottle_platform.py -m integration -v
+```
+
+Scenarios live in `tests/dottle_platform/scenarios.py` — add new functions and append them to `SCENARIOS`.
+
+**Note:** `DOTTLE_TEST_SYNC=1` is set by the runner so HTTP completes before the process exits (production agents still use background threads).
+
 ## Deploy on Railway (public URL)
 
 1. Push this repo to GitHub (see below).

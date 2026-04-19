@@ -25,22 +25,40 @@ def _headers() -> dict[str, str] | None:
     return {"X-API-Key": key, "Content-Type": "application/json"}
 
 
+def _test_sync_posts() -> bool:
+    """When true, ingest runs synchronously (for scenario tests / CI). Production default: false."""
+    return os.getenv("DOTTLE_TEST_SYNC", "").strip().lower() in ("1", "true", "yes")
+
+
+def ingest_post_sync(path: str, body: dict[str, Any], *, timeout: float = 30.0) -> requests.Response | None:
+    """
+    Synchronous ingest POST for tests and health checks. Returns None if DOTTLE_API_KEY is unset.
+    Raises requests.RequestException on network failure.
+    """
+    headers = _headers()
+    if headers is None:
+        return None
+    url = f"{_dottle_url()}{path}"
+    return requests.post(url, headers=headers, json=body, timeout=timeout)
+
+
 def _post(path: str, body: dict[str, Any]) -> None:
-    """Fire-and-forget — never blocks or raises."""
+    """Fire-and-forget in production; synchronous when DOTTLE_TEST_SYNC=1 (tests only)."""
     headers = _headers()
     if headers is None:
         return
 
+    url = f"{_dottle_url()}{path}"
+
     def _send() -> None:
         try:
-            requests.post(
-                f"{_dottle_url()}{path}",
-                headers=headers,
-                json=body,
-                timeout=5,
-            )
+            requests.post(url, headers=headers, json=body, timeout=15)
         except Exception:
             pass
+
+    if _test_sync_posts():
+        _send()
+        return
 
     threading.Thread(target=_send, daemon=True).start()
 

@@ -10,7 +10,8 @@ from typing import Any
 
 import requests
 
-_DEFAULT_DOTTLE_URL = "https://dottle-production.up.railway.app"
+# Ingest routes are under /api/v1 (see Dottle API).
+_DEFAULT_DOTTLE_URL = "https://dottle-production.up.railway.app/api/v1"
 
 
 def _dottle_url() -> str:

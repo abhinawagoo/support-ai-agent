@@ -21,7 +21,7 @@ streamlit run streamlit_app.py
    - `OPENAI_API_KEY` — for OpenAI models
    - `ANTHROPIC_API_KEY` — for Anthropic Claude models
    - Optional: `EXA_API_KEY` (Exa search tool), `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `LLM_PROVIDER` (`openai` or `anthropic`, default `openai`)
-   - Optional monitoring: `DOTTLE_API_KEY`, `DOTTLE_URL` (defaults to Dottle production), `DOTTLE_AGENT_NAME`, `DOTTLE_USER_ID`, `DOTTLE_USER_EMAIL`
+   - Optional monitoring: `DOTTLE_API_KEY`, `DOTTLE_URL` (default `https://dottle-production.up.railway.app/api/v1`), `DOTTLE_AGENT_NAME`, `DOTTLE_USER_ID`, `DOTTLE_USER_EMAIL`
 5. **Settings** → **Networking** → **Generate domain** (or attach your own).
 6. Redeploy if needed after changing variables.
 

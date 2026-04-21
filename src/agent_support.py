@@ -9,15 +9,26 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from .dottle import DottleSession, maybe_session
+from .simulation import SimulationContext
 from .tools import exa_search, fetch_url_text, search_local_docs
+from .tools.crm_sim import crm_query
+from .tools.drive_sim import google_drive_get
 
 
 SYSTEM_PROMPT = """You are a careful customer-support agent.
 
+You may use these integrations (sandbox / read-only):
+- **crm_query** — CRM lookup by contact, deal, or ticket (email or id).
+- **google_drive_get** — Read shared Drive files by `file_id` (contracts, readme exports).
+- **search_local_docs** — Search internal markdown/text docs on disk.
+- **fetch_url** — Fetch public URLs when the user provides a link.
+- **exa_web_search** — Semantic web discovery when configured (optional).
+
 Rules:
-- Prefer verified information from the provided tools over assumptions.
+- Prefer verified information from tools over assumptions.
 - If tools disagree or data is missing, say what is unknown and suggest next steps.
 - When citing the web, ground claims in tool results (URLs/snippets), not memory.
+- If a tool fails, acknowledge it and continue with what you still have (do not invent CRM or file contents).
 - Be concise, friendly, and action-oriented.
 """
 
@@ -26,6 +37,42 @@ Provider = Literal["openai", "anthropic"]
 
 
 _TOOL_SPECS: list[dict[str, Any]] = [
+    {
+        "name": "crm_query",
+        "description": "Read-only CRM lookup (Salesforce-style sandbox). Query contacts, deals, or tickets.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query_type": {
+                    "type": "string",
+                    "description": "One of: contact, deal, ticket",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Email address, record id, or short search string",
+                },
+            },
+            "required": ["query_type", "query"],
+        },
+    },
+    {
+        "name": "google_drive_get",
+        "description": "Read a Google Drive file by file_id; returns simulated extracted text (shared drive, read-only).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "description": "Drive file id, e.g. demo-contract-q2",
+                },
+                "mime_hint": {
+                    "type": "string",
+                    "description": "Optional mime hint (e.g. application/pdf)",
+                },
+            },
+            "required": ["file_id"],
+        },
+    },
     {
         "name": "search_local_docs",
         "description": "Search local markdown/text documentation on disk (project docs folder).",
@@ -143,19 +190,50 @@ def _anthropic_usage_tokens(response: Any) -> tuple[int, int]:
     return inp, out
 
 
-def _run_tool(name: str, args: dict[str, Any], *, docs_root: str, exa_api_key: str | None) -> str:
+def _extract_error_message(tool_result: str) -> str | None:
+    """Detect structured tool errors returned as JSON payloads."""
+    try:
+        payload = json.loads(tool_result)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict) and isinstance(payload.get("error"), str):
+        err = payload["error"].strip()
+        return err or "tool returned error"
+    return None
+
+
+def _run_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    docs_root: str,
+    exa_api_key: str | None,
+    simulation: SimulationContext,
+) -> str:
+    if name == "crm_query":
+        simulation.maybe_fail("crm_query")
+        return crm_query(str(args.get("query_type", "contact")), str(args.get("query", "")))
+    if name == "google_drive_get":
+        simulation.maybe_fail("google_drive_get")
+        return google_drive_get(
+            str(args.get("file_id", "")),
+            args.get("mime_hint") if args.get("mime_hint") else None,
+        )
     if name == "search_local_docs":
+        simulation.maybe_fail("search_local_docs")
         return search_local_docs(
             str(args.get("query", "")),
             docs_root,
             max_files=int(args.get("max_files", 10)),
         )
     if name == "fetch_url":
+        simulation.maybe_fail("fetch_url")
         return fetch_url_text(
             str(args.get("url", "")),
             max_chars=int(args.get("max_chars", 12000)),
         )
     if name == "exa_web_search":
+        simulation.maybe_fail("exa_web_search")
         if not exa_api_key:
             return json.dumps({"error": "EXA_API_KEY not configured"}, ensure_ascii=False)
         return exa_search(
@@ -175,6 +253,7 @@ def _run_openai_loop(
     exa_api_key: str | None,
     status_callback: Callable[[str], None] | None,
     dottle: DottleSession | None,
+    simulation: SimulationContext,
 ) -> tuple[str, list[ToolTraceEntry]]:
     tools = _openai_tools()
     messages: list[dict[str, Any]] = [
@@ -252,11 +331,21 @@ def _run_openai_loop(
             tool_status = "ok"
             tool_err: str | None = None
             try:
-                result = _run_tool(name, args, docs_root=docs_root, exa_api_key=exa_api_key)
+                result = _run_tool(
+                    name,
+                    args,
+                    docs_root=docs_root,
+                    exa_api_key=exa_api_key,
+                    simulation=simulation,
+                )
             except Exception as e:  # noqa: BLE001
                 tool_status = "error"
                 tool_err = repr(e)
                 result = json.dumps({"error": tool_err}, ensure_ascii=False)
+            parsed_err = _extract_error_message(result)
+            if parsed_err:
+                tool_status = "error"
+                tool_err = parsed_err
             tool_ms = int((time.perf_counter() - t_tool) * 1000)
             if dottle:
                 dottle.tool(name, status=tool_status, error_message=tool_err, duration_ms=tool_ms)
@@ -279,6 +368,7 @@ def _run_anthropic_loop(
     exa_api_key: str | None,
     status_callback: Callable[[str], None] | None,
     dottle: DottleSession | None,
+    simulation: SimulationContext,
 ) -> tuple[str, list[ToolTraceEntry]]:
     tools = _anthropic_tools()
     messages: list[dict[str, Any]] = [*user_messages]
@@ -334,11 +424,21 @@ def _run_anthropic_loop(
             tool_status = "ok"
             tool_err: str | None = None
             try:
-                result = _run_tool(name, args, docs_root=docs_root, exa_api_key=exa_api_key)
+                result = _run_tool(
+                    name,
+                    args,
+                    docs_root=docs_root,
+                    exa_api_key=exa_api_key,
+                    simulation=simulation,
+                )
             except Exception as e:  # noqa: BLE001
                 tool_status = "error"
                 tool_err = repr(e)
                 result = json.dumps({"error": tool_err}, ensure_ascii=False)
+            parsed_err = _extract_error_message(result)
+            if parsed_err:
+                tool_status = "error"
+                tool_err = parsed_err
             tool_ms = int((time.perf_counter() - t_tool) * 1000)
             if dottle:
                 dottle.tool(name, status=tool_status, error_message=tool_err, duration_ms=tool_ms)
@@ -373,6 +473,7 @@ def run_support_agent(
     dottle_agent_name: str = "support-ai-agent",
     dottle_user_id: str | None = None,
     dottle_user_email: str | None = None,
+    simulation_mode: str = "off",
 ) -> tuple[str, list[ToolTraceEntry]]:
     model = model.strip()
     if not model:
@@ -388,6 +489,9 @@ def run_support_agent(
         raise ValueError(f"Unknown provider: {provider}")
 
     dottle = maybe_session(dottle_agent_name, dottle_user_id, dottle_user_email)
+    _sm = (simulation_mode or "off").strip().lower()
+    _allowed = {"off", "crm", "drive", "docs", "exa", "fetch_url", "random", "first_any", "second_any"}
+    simulation = SimulationContext(mode=_sm if _sm in _allowed else "off")
     try:
         if provider == "openai":
             client = OpenAI(api_key=openai_api_key.strip())
@@ -399,6 +503,7 @@ def run_support_agent(
                 exa_api_key=exa_api_key,
                 status_callback=status_callback,
                 dottle=dottle,
+                simulation=simulation,
             )
         else:
             client = Anthropic(api_key=anthropic_api_key.strip())
@@ -410,6 +515,7 @@ def run_support_agent(
                 exa_api_key=exa_api_key,
                 status_callback=status_callback,
                 dottle=dottle,
+                simulation=simulation,
             )
     except Exception as e:
         if dottle:

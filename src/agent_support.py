@@ -348,7 +348,13 @@ def _run_openai_loop(
                 tool_err = parsed_err
             tool_ms = int((time.perf_counter() - t_tool) * 1000)
             if dottle:
-                dottle.tool(name, status=tool_status, error_message=tool_err, duration_ms=tool_ms)
+                dottle.tool(
+                    name,
+                    status=tool_status,
+                    error_message=tool_err,
+                    error_type="ToolError" if tool_err else None,
+                    duration_ms=tool_ms,
+                )
 
             trace.append(ToolTraceEntry(name=name, arguments=args, result_preview=_preview(result)))
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
@@ -441,7 +447,13 @@ def _run_anthropic_loop(
                 tool_err = parsed_err
             tool_ms = int((time.perf_counter() - t_tool) * 1000)
             if dottle:
-                dottle.tool(name, status=tool_status, error_message=tool_err, duration_ms=tool_ms)
+                dottle.tool(
+                    name,
+                    status=tool_status,
+                    error_message=tool_err,
+                    error_type="ToolError" if tool_err else None,
+                    duration_ms=tool_ms,
+                )
 
             trace.append(ToolTraceEntry(name=name, arguments=args, result_preview=_preview(result)))
             tool_blocks.append(
@@ -519,7 +531,7 @@ def run_support_agent(
             )
     except Exception as e:
         if dottle:
-            dottle.finish("error", error_message=repr(e))
+            dottle.finish("failed", error_message=repr(e), error_type=type(e).__name__)
         raise
     else:
         if dottle:

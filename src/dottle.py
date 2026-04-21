@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -28,6 +29,41 @@ def _headers() -> dict[str, str] | None:
 def _test_sync_posts() -> bool:
     """When true, ingest runs synchronously (for scenario tests / CI). Production default: false."""
     return os.getenv("DOTTLE_TEST_SYNC", "").strip().lower() in ("1", "true", "yes")
+
+
+def _redact_pii_enabled() -> bool:
+    return os.getenv("DOTTLE_REDACT_PII", "").strip().lower() in ("1", "true", "yes")
+
+
+def _tags() -> list[str]:
+    raw = (os.getenv("DOTTLE_TAGS") or "").strip()
+    if not raw:
+        return []
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def _agent_version() -> str | None:
+    v = (os.getenv("DOTTLE_AGENT_VERSION") or "").strip()
+    return v or None
+
+
+def _redact_text(text: str | None) -> str | None:
+    if text is None:
+        return None
+    if not _redact_pii_enabled():
+        return text
+    out = text
+    patterns = [
+        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",  # email
+        r"\b(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?){2}\d{4}\b",  # phone
+        r"\b(?:\d[ -]*?){13,19}\b",  # card-like sequences
+        r"\b\d{3}-\d{2}-\d{4}\b",  # ssn
+        r"\b(?:\d{1,3}\.){3}\d{1,3}\b",  # ipv4
+        r"\b(?:sk|dtl_live|api[_-]?key)[A-Za-z0-9_\-]{8,}\b",  # common API key prefixes
+    ]
+    for p in patterns:
+        out = re.sub(p, "[REDACTED]", out, flags=re.IGNORECASE)
+    return out
 
 
 def ingest_post_sync(path: str, body: dict[str, Any], *, timeout: float = 30.0) -> requests.Response | None:
@@ -85,6 +121,8 @@ class DottleSession:
                 "started_at": now(),
                 "user_id": user_id,
                 "user_email": user_email,
+                "tags": _tags(),
+                "agent_version": _agent_version(),
             },
         )
 
@@ -112,8 +150,8 @@ class DottleSession:
                         "model": model,
                         "input_tokens": input_tokens,
                         "output_tokens": output_tokens,
-                        "input_text": input_text,
-                        "output_text": output_text,
+                        "input_text": _redact_text(input_text),
+                        "output_text": _redact_text(output_text),
                         "duration_ms": duration_ms,
                     }
                 ],
@@ -125,6 +163,7 @@ class DottleSession:
         tool_name: str,
         status: str = "ok",
         error_message: str | None = None,
+        error_type: str | None = None,
         duration_ms: int | None = None,
     ) -> None:
         _post(
@@ -138,20 +177,27 @@ class DottleSession:
                         "name": tool_name,
                         "status": status,
                         "started_at": now(),
-                        "error_message": error_message,
+                        "error_message": _redact_text(error_message),
+                        "error_type": error_type,
                         "duration_ms": duration_ms,
                     }
                 ],
             },
         )
 
-    def finish(self, status: str = "completed", error_message: str | None = None) -> None:
+    def finish(
+        self,
+        status: str = "completed",
+        error_message: str | None = None,
+        error_type: str | None = None,
+    ) -> None:
         _post(
             "/ingest/session/end",
             {
                 "session_id": self.session_id,
                 "status": status,
                 "ended_at": now(),
-                "error_message": error_message,
+                "error_message": _redact_text(error_message),
+                "error_type": error_type,
             },
         )
